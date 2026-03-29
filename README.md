@@ -68,26 +68,3 @@ The app checks for `OPENAI_API_KEY` in this order:
 2. Environment variables loaded from `.env`
 
 If your current key has ever been committed, shared, or exposed publicly, rotate it before deploying.
-
-## Learning Journal
-
-### GAI Tools Used
-
-- ChatGPT / Codex for implementation planning, debugging, refactoring, and UI iteration
-- OpenAI API for:
-  - automatic dataset-role mapping
-  - chart explanation and insight generation
-
-### Prompts Used
-
-- Mapping prompt:
-  - asked the model to assign `time_dimension`, `category_dimension`, `group_dimension`, `primary_metric`, and `secondary_metric`
-  - provided a compact schema summary plus only `head(10)` and `tail(10)` rows to reduce token use
-- Chart insight prompt:
-  - asked the model to explain the chart, summarize key insights, and recommend what the user should do first
-
-### Lessons Learned
-
-- A hybrid design works better than pure AI: deterministic profiling and transformations should happen in code, while AI should only assist with ambiguous semantic tasks.
-- Caching matters for user experience and cost control. Dataset mapping and chart analyses should not call the API repeatedly for the same state.
-- Building experimental sandboxes before merging into the main app reduced regressions and made it easier to validate chart and interaction changes.
