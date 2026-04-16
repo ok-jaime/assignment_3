@@ -105,10 +105,36 @@ def repair_openxml_workbook(file) -> BytesIO:
 
 
 def try_parse_dates(series: pd.Series) -> pd.Series | None:
+    parsed = parse_time_series(series)
+    return parsed if parsed is not None and parsed.notna().mean() >= 0.6 else None
+
+
+def parse_time_series(series: pd.Series) -> pd.Series | None:
     if pd.api.types.is_datetime64_any_dtype(series):
         return pd.to_datetime(series, errors="coerce")
-    if pd.api.types.is_numeric_dtype(series):
-        return None
+
+    numeric_candidate = pd.to_numeric(series, errors="coerce")
+    numeric_valid_ratio = numeric_candidate.notna().mean()
+    if numeric_valid_ratio >= 0.75:
+        non_null_numeric = numeric_candidate.dropna()
+        is_year_like = (
+            not non_null_numeric.empty
+            and ((non_null_numeric >= 1000) & (non_null_numeric <= 3000)).all()
+            and (non_null_numeric % 1 == 0).all()
+        )
+        if is_year_like:
+            year_strings = non_null_numeric.astype(int).astype(str)
+            parsed_years = pd.to_datetime(year_strings, format="%Y", errors="coerce")
+            parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+            parsed.loc[non_null_numeric.index] = parsed_years.values
+            return parsed
+
+    string_candidate = series.astype("string").str.strip()
+    digit_mask = string_candidate.str.fullmatch(r"\d{4}").fillna(False)
+    if digit_mask.mean() >= 0.6:
+        parsed_years = pd.to_datetime(string_candidate.where(digit_mask), format="%Y", errors="coerce")
+        return pd.Series(parsed_years, index=series.index)
+
     parsed = pd.to_datetime(series, errors="coerce")
     return parsed if parsed.notna().mean() >= 0.6 else None
 
@@ -324,7 +350,7 @@ def choose_mapping(profiles: list[ColumnProfile]) -> dict[str, str | None]:
 def normalized_frame(df: pd.DataFrame, mapping: dict[str, str | None]) -> pd.DataFrame:
     frame = df.copy()
     if mapping["time_dimension"]:
-        frame["_time"] = pd.to_datetime(frame[mapping["time_dimension"]], errors="coerce")
+        frame["_time"] = parse_time_series(frame[mapping["time_dimension"]])
         frame = frame.dropna(subset=["_time"])
     if mapping["primary_metric"]:
         frame["_metric"] = pd.to_numeric(frame[mapping["primary_metric"]], errors="coerce")
@@ -380,6 +406,12 @@ def get_color_scale(values: list[str]):
 
 def build_time_chart_data(frame: pd.DataFrame, group_enabled: bool, time_grain: str, aggregation: str) -> pd.DataFrame:
     bucketed = build_time_buckets(frame, time_grain)
+    required_cols = {"_time_label", "_time_period", "_metric"}
+    if not required_cols.issubset(bucketed.columns):
+        empty_cols = ["_time_label", "_time_period", "_metric"]
+        if group_enabled and "_group" in bucketed.columns:
+            empty_cols.append("_group")
+        return pd.DataFrame(columns=empty_cols)
     group_cols = ["_time_label", "_time_period"]
     if group_enabled and "_group" in bucketed.columns:
         group_cols.append("_group")
@@ -740,7 +772,7 @@ filtered_df = raw_df.copy()
 filter_mask = pd.Series(True, index=filtered_df.index)
 
 if mapping["time_dimension"]:
-    parsed_time = pd.to_datetime(filtered_df[mapping["time_dimension"]], errors="coerce")
+    parsed_time = parse_time_series(filtered_df[mapping["time_dimension"]])
     valid_time = parsed_time.dropna()
     if not valid_time.empty:
         min_date = valid_time.min().date()
@@ -843,7 +875,7 @@ if selected_metric_name == mapping["secondary_metric"] and "_metric_secondary" i
     normalized["_metric"] = normalized["_metric_secondary"]
 
 selected_metric_total = float(normalized["_metric"].dropna().sum()) if "_metric" in normalized.columns else 0.0
-valid_time = pd.to_datetime(filtered_df[mapping["time_dimension"]], errors="coerce").dropna() if mapping["time_dimension"] else pd.Series(dtype="datetime64[ns]")
+valid_time = parse_time_series(filtered_df[mapping["time_dimension"]]).dropna() if mapping["time_dimension"] else pd.Series(dtype="datetime64[ns]")
 
 summary_left, summary_mid_left, summary_mid_right, summary_right = st.columns(4)
 summary_left.metric(f"Total {selected_metric_name}", f"{selected_metric_total:,.2f}")
